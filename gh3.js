@@ -94,7 +94,6 @@
 		return child;
 	};
 
-
 	Base64 = { //http://www.webtoolkit.info/javascript-base64.html
 
 		// private property
@@ -236,8 +235,8 @@
 	if (window.XDomainRequest != null) {
 		try {
 			new XDomainRequest()
-			$.support.cors = true
-			$.ajaxSetup.xhr = function() { return new XDomainRequest() }
+			jQuery.support.cors = true
+			jQuery.ajaxSetup.xhr = function() { return new XDomainRequest() }
 		} catch (e) {}
 	}
 
@@ -247,21 +246,30 @@
 		protocol : "https",
 		domain : "api.github.com",
 		callHttpApi : function (apiParams) {
-			apiParams.url = Gh3.Helper.protocol + "://" + Gh3.Helper.domain + "/" + apiParams.service;
-			if ($.support.cors) {
-				apiParams.headers = { Origin: location.host }
+			//window.console.log("api params");
+			//window.console.log(apiParams);
+			apiParams.url = Gh3.Helper.protocol + "://" + Gh3.Helper.domain + "/" + apiParams.service+"?access_token="+DeltaUtils.getUserAccessToken();
+			//apiParams.access_token=DeltaUtils.getUserAccessToken;
+
+			if (jQuery.support.cors) {
+
+				//apiParams.headers = {Origin: "api.github.com" }//not needed, the browser will do it
+				
+				//apiParams.headers={Access_Token: DeltaUtils.getUserAccessToken()}
+				
+				
 				var success = apiParams.success
-				if ($.isFunction(success)) {
+				if (jQuery.isFunction(success)) {
 					apiParams.success = function (data, textStatus, jqXHR) {
 						success.call(this, {data: data}, textStatus, jqXHR)
 					}
 				}
 			} else {
-				//delete apiParams.service;
 				apiParams.dataType = 'jsonp';
-			}
 
-			$.ajax(apiParams);
+			}
+			apiParams.cache=false;
+			jQuery.ajax(apiParams);
 		}
 	});
 
@@ -480,6 +488,8 @@
 
 	Gh3.Commit = Kind.extend({
 		constructor : function (commitInfos) {
+			//window.console.log("commitInfos---");
+			//window.console.log(commitInfos);
 			this.author = commitInfos.author;
 			this.author.email = commitInfos.commit.author.email;
 			this.author.name = commitInfos.commit.author.name;
@@ -487,7 +497,65 @@
 			this.message = commitInfos.commit.message;
 			this.sha = commitInfos.sha;
 			this.url = commitInfos.url;
-		}
+			this.parents=commitInfos.parents;
+			//this.files=commitInfos.files;
+			//this.repositoryName=commitInfos.repository.name;
+
+		},
+		getFileByName : function (name) {
+			return _.find(this.contents, function (item) {
+			return item.name == name && item.type == "file";
+			});
+		},
+		getDirByName : function (name) {
+			return _.find(this.contents, function (item) {
+			return item.name == name && item.type == "dir";
+			});
+		},
+		eachContent : function (callback) {
+			_.each(this.contents, function (commit) {
+			callback(commit);
+			});
+		},
+		fetchChanges : function (repositoryName,callback) { //sget the changes that a commit introduces
+			var that = this;
+			that.changedFiles = [];
+
+			Gh3.Helper.callHttpApi({
+				service : "repos/"+that.author.login+"/"+repositoryName+"/commits/"+that.sha,
+				//data : {},
+				success : function(res) {
+						that.changedFiles.push(res.data.files);
+						if (callback) callback(null, that);
+					},
+				error : function (res) {
+					if (callback) callback(new Error(res.responseJSON.message),res);
+				}
+			});
+		},
+		fetchContents : function (repositoryName,callback) { //see how to refactor with Gh3.Dir
+			var that = this;
+			that.contents = [];
+
+			Gh3.Helper.callHttpApi({
+				service : "repos/"+that.author.login+"/"+repositoryName+"/contents",//?ref="+that.sha,
+				data : {ref:that.sha },
+				success : function(res) {
+					_.each(res.data, function (item) {
+					//window.console.log("item "+item);
+					if (item.type == "file") that.contents.push(new Gh3.File(item, that.author, repositoryName, that.sha));
+					if (item.type == "dir") that.contents.push(new Gh3.Dir(item, that.author, repositoryName, that.sha));
+					});
+					if (callback) callback(null, that);
+				},
+				error : function (res) {
+					if (callback) callback(new Error(res.responseJSON.message),res);
+				}
+			});
+		},
+		getContents: function(){
+			return this.contents;
+		},
 	},{});
 
 	Gh3.ItemContent = Kind.extend({
@@ -511,10 +579,13 @@
 
 			Gh3.Helper.callHttpApi({
 				service : "repos/"+that.user.login+"/"+that.repositoryName+"/contents/"+that.path,
+				data : {ref:that.branchName },
 				success : function(res) {
 					that.content = res.data.content;
-					that.rawContent = Base64.decode(res.data.content);
 
+					that.rawContent = Base64.decode(res.data.content);
+					//window.console.log("rawContent for: " +that.branchName);
+					//window.console.log(that.rawContent);
 					if (callback) callback(null, that);
 				},
 				error : function (res) {
@@ -575,14 +646,19 @@
 		constructor : function (contentItem, ghUser, repositoryName, branchName) {
 			Gh3.Dir.__super__.constructor.call(this, contentItem, ghUser, repositoryName, branchName);
 		},
+
 		fetchContents : function (callback) {
 			var that = this;
 			that.contents = [];
+			that.sha;
 
 			Gh3.Helper.callHttpApi({
 				service : "repos/"+that.user.login+"/"+that.repositoryName+"/contents/"+that.path,
 				data : {ref: that.branchName },
 				success : function(res) {
+					that.sha=res.sha;
+					//window.console.log(res);
+					//window.console.log(that.sha);
 					_.each(res.data, function (item) {
 						if (item.type == "file") that.contents.push(new Gh3.File(item, that.user, that.repositoryName, that.branchName));
 						if (item.type == "dir") that.contents.push(new Gh3.Dir(item, that.user, that.repositoryName, that.branchName));
@@ -595,6 +671,7 @@
 			});
 
 		},
+
 		reverseContents : function () {
 			this.contents.reverse();
 		},
@@ -606,6 +683,7 @@
 			}
 		},
 		getContents : function() { return this.contents; },
+		
 		getFileByName : function (name) {
 			return _.find(this.contents, function (item) {
 				return item.name == name && item.type == "file";
@@ -629,12 +707,12 @@
 
 	Gh3.Branch = Kind.extend({
 		constructor : function (name, sha, url, ghUser, repositoryName) {
-			if (name) this.name = name;
-			if (sha) this.sha = sha;
-			if (url) this.url = url;
+		if (name) this.name = name;
+		if (sha) this.sha = sha;
+		if (url) this.url = url;
 
-			if (ghUser) this.user = ghUser;
-			if (repositoryName) this.repositoryName = repositoryName;
+		if (ghUser) this.user = ghUser;
+		if (repositoryName) this.repositoryName = repositoryName;
 
 		},
 
@@ -643,13 +721,39 @@
 			that.contents = [];
 
 			Gh3.Helper.callHttpApi({
-				service : "repos/"+that.user.login+"/"+that.repositoryName+"/contents/",
-				data : {ref: that.name },
-				success : function(res) {
-					_.each(res.data, function (item) {
+			service : "repos/"+that.user.login+"/"+that.repositoryName+"/contents",//?ref="+that.name,
+			data : {ref: that.name },
+			success : function(res) {
+			_.each(res.data, function (item) {
 
-						if (item.type == "file") that.contents.push(new Gh3.File(item, that.user, that.repositoryName, that.name));
-						if (item.type == "dir") that.contents.push(new Gh3.Dir(item, that.user, that.repositoryName, that.name));
+			if (item.type == "file") that.contents.push(new Gh3.File(item, that.user, that.repositoryName, that.name));
+			if (item.type == "dir") that.contents.push(new Gh3.Dir(item, that.user, that.repositoryName, that.name));
+			});
+			if (callback) callback(null, that);
+			},
+
+
+			error : function (res) {
+				window.console.log("ERROR re:"+res);
+				window.console.log(res);
+			if (callback) callback(new Error(res.responseJSON.message),res);
+			}
+			});
+
+		},
+		fetchCommits : function (callback) {//http://developer.github.com/v3/repos/commits/
+			window.console.log("fetch commits for branch "+this.name+" and sha:"+this.sha);
+			var that = this;
+			that.commits = [];
+
+			Gh3.Helper.callHttpApi({
+				service : "repos/"+that.user.login+"/"+that.repositoryName+"/commits",
+				data : {sha: that.sha },
+				success : function(res) {
+					_.each(res.data, function (commit) {
+						
+					//	window.console.log(commit.parents);
+						that.commits.push(new Gh3.Commit(commit));
 					});
 					if (callback) callback(null, that);
 				},
@@ -659,37 +763,99 @@
 			});
 
 		},
+		fetchSingleCommitBySha : function (sha, callback) {//http://developer.github.com/v3/repos/commits/
+			window.console.log("fetch commits from Sha Gh3 Repository");
+			var that = this;
+			that.commits = [];
+
+			Gh3.Helper.callHttpApi({
+				service : "repos/"+that.user.login+"/"+that.name+"/commits/"+sha,
+				data : {},
+				success : function(res) {
+					_.each(res.data, function (commit) {
+						that.commits.push(new Gh3.Commit(commit));
+					});
+					if (callback) callback(null, that);
+				},
+				error : function (res) {
+					if (callback) callback(new Error(res.responseJSON.message),res);
+				}
+			});
+
+		},
+
+		fetchFileWithPath: function(pathToFile,callback){
+			var that=this;
+			that.file="undefined";
+
+			Gh3.Helper.callHttpApi({
+				service : "repos/"+that.user.login+"/"+that.repositoryName+"/contents/"+pathToFile,
+				data : {ref: that.name },
+				
+				success : function(res) {
+						that.file= new Gh3.File(res.data, that.user, that.repositoryName, that.name);
+						window.console.log("el file 3");
+						window.console.log(that.file);
+						if (callback) 
+							callback(null, that);
+
+				},
+				error : function (res) {
+					if (callback) callback(new Error(res.responseJSON.message),res);
+				}
+			});
+		},
+		getCommits : function () { 
+			window.console.log("branch "+this.name+" returning commits");
+			return this.commits; },
+		getLastCommit : function () {
+			return this.commits[0];
+		},
+		getCommitBySha : function (shaId) {
+			return _.find(this.commits, function (commit) {
+				if (commit.sha == shaId)//that.s
+					return commit;
+			});
+		},
 		reverseContents : function () {
 			this.contents.reverse();
 		},
 		sortContents : function (comparison_func) {
 			if (comparison_func) {
-				this.contents.sort(comparison_func);
+			this.contents.sort(comparison_func);
 			} else {
-				this.contents.sort();
+			this.contents.sort();
 			}
 		},
 		getContents : function() { return this.contents; },
+		
 		getFileByName : function (name) {
 			return _.find(this.contents, function (item) {
-				return item.name == name && item.type == "file";
+			return item.name == name && item.type == "file";
 			});
 		},
+
+		getFileByPath: function (path) {
+			return this.file;
+			
+		},
+
+
 		getDirByName : function (name) {
 			return _.find(this.contents, function (item) {
-				return item.name == name && item.type == "dir";
+			return item.name == name && item.type == "dir";
 			});
 		},
 		eachContent : function (callback) {
 			_.each(this.contents, function (branch) {
-				callback(branch);
+			callback(branch);
 			});
 		},
 		filterContents : function (comparator) {
 			return _.filter(this.contents, comparator);
 		}
 
-	},{});
+		},{});
 
 	Gh3.Issue = Kind.extend({
 		constructor : function (number, ghUser, repositoryName, infos) {
@@ -703,7 +869,6 @@
 					this[prop] = infos[prop];
 				}
 			}
-
 		},
 
 		fetchContents : function (callback) { //see how to refactor with Gh3.Dir
@@ -711,6 +876,45 @@
 
 			Gh3.Helper.callHttpApi({
 				service : "repos/"+that.user.login+"/"+that.repositoryName+"/issues/"+that.id,
+				success : function(res) {
+					_.each(res.data, function (item) {
+						for(var prop in res.data) {
+							that[prop] = res.data[prop];
+						}
+					});
+					if (callback) callback(null, that);
+				},
+				error : function (res) {
+					if (callback) callback(new Error(res.responseJSON.message),res);
+				}
+			});
+
+		}
+
+	},{});
+
+	Gh3.Pull=Kind.extend({//Mine new Gh3.Pull(pull.number, pull.title, pull.body, pull.state, pull.user, that.name, pull));
+		constructor : function (number, title, body, state, ghUser, repositoryName, infos){
+			if (number) this.number = number;
+			if (title) this.title = title;
+			if (body) this.body = body;
+			if (state) this.state = state
+
+			if (ghUser) this.user = ghUser;
+			if (repositoryName) this.repositoryName = repositoryName;
+
+			if (infos) {
+				for(var prop in infos) {
+					this[prop] = infos[prop];
+				}
+			}
+
+		},
+		fetchContents : function (callback) {
+			var that = this;
+
+			Gh3.Helper.callHttpApi({
+				service : "repos/"+that.user.login+"/"+that.repositoryName+"/pulls/"+that.id,
 				success : function(res) {
 					_.each(res.data, function (item) {
 						for(var prop in res.data) {
@@ -745,22 +949,66 @@
 		fetch : function (callback) {
 			var that = this;
 			//TODO test user.login & name
-
 			Gh3.Helper.callHttpApi({
 				service : "repos/"+that.user.login+"/"+that.name,
 				success : function(res) {
+					window.console.log("success fetching repo api "+res);
 					for(var prop in res.data) {
 						that[prop] = res.data[prop];
 					}
 					if (callback) callback(null, that);
 				},
 				error : function (res) {
-
+					window.console.log("repos/"+that.user.login+"/"+that.name);
+					window.console.log("erorr in fetching repo api "+res);
+					window.console.log(res);
 					if (callback) callback(new Error(res.responseJSON.message),res);
 				}
 			});
 
 		},
+
+		/*fetchFork : function (callback){
+			var that = this;
+			that.forks = [];
+
+			Gh3.Helper.callHttpApi({
+				service : "repos/"+that.user.login+"/"+that.name+"/forks",
+				success : function(res) {
+					_.each(res.data, function (branch) {
+						that.forks.push(new Gh3.Repostiory(repository.name, that.user) );
+					});
+
+					if (callback) callback(null, that);
+				},
+				error : function (res) {
+					if (callback) callback(new Error(res.responseJSON.message),res);
+				}
+			});
+
+		},*/
+
+
+
+			fetchFork : function (callback){
+			var that = this;
+			that.forks = [];
+
+			Gh3.Helper.callHttpApi({
+				service : "repos/"+that.user.login+"/"+that.name+"/forks",
+				success : function(res) {
+					_.each(res.data, function (fork) {
+						that.forks.push(new Gh3.Repository(fork.name, fork.owner, fork.infos) );
+					});
+					if (callback) callback(null, that);
+				},
+				error : function (res) {
+					if (callback) callback(new Error(res.responseJSON.message),res);
+				}
+			});
+
+		},
+
 		fetchBranches : function (callback) {
 			var that = this;
 			that.branches = [];
@@ -780,6 +1028,7 @@
 			});
 
 		},
+		
 		fetchIssues : function (callback) {
 			var that = this;
 			that.issues = [];
@@ -798,8 +1047,30 @@
 					if (callback) callback(new Error(res.responseJSON.message),res);
 				}
 			});
+		},
+
+		fetchPullRequest : function (callback) {
+			var that = this;
+			that.pulls = [];
+
+			Gh3.Helper.callHttpApi({
+				service : "repos/"+that.user.login+"/"+that.name+"/pulls",
+				data : {sort: "updated"},
+				success : function(res) {
+					_.each(res.data, function (pull) {
+						that.pulls.push(new Gh3.Pull(pull.number, pull.title, pull.body, pull.state, pull.user, that.name, pull));
+					});
+
+					if (callback) callback(null, that);
+				},
+				error : function (res) {
+					if (callback) callback(new Error(res.responseJSON.message),res);
+				}
+			});
 
 		},
+
+
 		fetchClosedIssues : function (callback) {
 			var that = this;
 			that.issues = [];
@@ -820,7 +1091,133 @@
 			});
 
 		},
+		fetchCommits : function (callback) {//http://developer.github.com/v3/repos/commits/
+			window.console.log("dentroooo fetchCommits para Gh3 Repository "+this.name);
+			var that = this;
+			that.commits = [];
+
+			Gh3.Helper.callHttpApi({
+				service : "repos/"+that.user.login+"/"+that.name+"/commits",
+				//data : {},
+				success : function(res) {
+					_.each(res.data, function (commit) {
+						that.commits.push(new Gh3.Commit(commit));
+					});
+					if (callback) callback(null, that);
+				},
+				error : function (res) {
+					if (callback) callback(new Error(res.responseJSON.message),res);
+				}
+			});
+
+		},
+		fetchSingleCommitBySha : function (sha, callback) {//http://developer.github.com/v3/repos/commits/
+			window.console.log("fetch commits from Sha Gh3 Repository");
+			var that = this;
+			that.commits = [];
+
+			Gh3.Helper.callHttpApi({
+				service : "repos/"+that.user.login+"/"+that.name+"/commits/"+sha,
+				//data : {path: that.path },
+				success : function(res) {
+					_.each(res.data, function (commit) {
+						that.commits.push(new Gh3.Commit(commit));
+					});
+					if (callback) callback(null, that);
+				},
+				error : function (res) {
+					if (callback) callback(new Error(res.responseJSON.message),res);
+				}
+			});
+
+		},
+		fetchCommitsFromSha : function (sha, callback) {//http://developer.github.com/v3/repos/commits/
+			window.console.log("fetch commits for repo "+this.name+ " with sha:"+sha);
+			var that = this;
+			that.commits=[];
+
+			Gh3.Helper.callHttpApi({
+				service : "repos/"+that.user.login+"/"+that.name+"/commits",//?sha="+sha,
+				data : {sha: that.sha },
+				success : function(res) {
+					_.each(res.data, function (commit) {
+						that.commits.push(new Gh3.Commit(commit));
+						//window.console.log(commit);
+						//return (new Gh3.Commit(commit));
+					});
+					if (callback) callback(null, that);
+				},
+				error : function (res) {
+					if (callback) callback(new Error(res.responseJSON.message),res);
+				}
+			});
+
+		},
+		fetchBlob: function(sha, callback){
+			window.console.log("fetch blob");
+			var that = this;
+			that.blob=[];
+
+			Gh3.Helper.callHttpApi({
+				service : "repos/"+that.user.login+"/"+that.name+"/git/blobs/"+sha,//?sha="+sha,
+				//data : {sha: sha },
+				success : function(res) {
+					window.console.log(res);
+						that.blob=(new Gh3.File(res.data));
+					
+					if (callback) callback(null, that);
+				},
+				error : function (res) {
+					if (callback) callback(new Error(res.responseJSON.message),res);
+				}
+			});
+
+		},
+	
+
+		/*createBranch: function (parentBranch, newBranch, callback){
+			var that = this;
+			//first get the reference from parent branch
+
+			Gh3.Helper.callHttpApi({
+				//GET MASTER
+				service : "repos/"+that.user.login+"/"+that.name+"/git/refs",//?sha="+sha,
+				data : {sha: sha, ref:"refs/heads" },
+				success : function(res) {
+					window.console.log(res.data); 
+
+					if (callback) callback(null, that);
+				},
+				error : function (res) {
+					if (callback) callback(new Error(res.responseJSON.message),res);
+				}
+			});   
+
+		},
+		/*getCommitsFromShaSinceUntil : function (sha,since,until, callback) {//http://developer.github.com/v3/repos/commits/
+			window.console.log("getCommitsFromShaSinceUntil Gh3 Repository");
+			var that = this;
+			that.commits = [];
+
+			Gh3.Helper.callHttpApi({
+				service : "repos/"+that.user.login+"/"+that.name+"/commits?sha="+sha+"&until="+until+"&since="+since,
+				data : {path: that.path },
+				success : function(res) {
+					_.each(res.data, function (commit) {
+						if (commit.date>since && commit.date<until) 
+						that.commits.push(new Gh3.Commit(commit));
+					});
+					if (callback) callback(null, that);
+				},
+				error : function (res) {
+					if (callback) callback(new Error(res.responseJSON.message),res);
+				}
+			});
+
+		},*/
 		getBranches : function () { return this.branches; },
+		getForks : function () {return this.forks;},
+		getPullRequests : function () { return this.pulls; },
 		getBranchByName : function (name) {
 			return _.find(this.branches, function (branch) {
 				return branch.name == name;
@@ -842,6 +1239,13 @@
 			}
 		},
 		getIssues : function () { return this.issues; },
+		getIssueByNumber : function (num) { 
+			return _.find(this.issues, function (issue) {
+				if (issue.number == num)
+					return issue;
+			});
+		 },
+
 		eachIssue : function (callback) {
 			_.each(this.issues, function (issue) {
 				callback(issue);
@@ -849,6 +1253,37 @@
 		},
 		reverseIssues : function () {
 			this.issues.reverse();
+		},	
+		getCommits : function () { return this.commits; },
+		getCommitBySha : function (sha) {
+			return _.find(this.commits, function (commit) {
+				if (commit.sha == sha)
+					return commit;
+			});
+		},
+		getLastCommit : function () {
+			return this.commits[0];
+		},
+		getFirstCommit : function () {
+			return this.commits[this.commits.length-1];
+		},
+		eachCommit : function (callback) {
+			_.each(this.commits, function (branch) {
+			callback(branch);
+		});
+		},
+		filterCommits : function (comparator) {
+			return _.filter(this.commits, comparator);
+		},
+		reverseCommits : function () {
+			this.commits.reverse();
+		},
+		sortCommits: function (comparison_func) {
+			if (comparison_func) {
+			this.commits.sort(comparison_func);
+			} else {
+			this.commits.sort();
+			}
 		}
 
 	},{});
@@ -857,9 +1292,7 @@
 
 	Gh3.Repositories = Kind.extend({//http://developer.github.com/v3/repos/
 		constructor : function (ghUser) {
-
 			if (ghUser) this.user = ghUser;
-
 		},
 		//List user repositories
 		fetch : function (pagesInfoAndParameters, paginationInfo, callback) {
@@ -881,7 +1314,6 @@
 					if (callback) callback(new Error(res.responseJSON.message),res);
 				}
 			});
-
 		},
 		reverseRepositories : function () {
 			this.repositories.reverse();
@@ -919,7 +1351,7 @@
 				data : pagesInfo,
 				//beforeSend: function (xhr) { xhr.setRequestHeader ("rel", paginationInfo); },
 				success : function(res) {
-					//console.log("*** : ", res);
+					//window.console.log("*** : ", res);
 					_.each(res.data.repositories, function (repository) {
 						Gh3.Repositories.repositories.push(new Gh3.Repository(repository.name, new Gh3.User(repository.owner), repository));
 						//owner & login : same thing ???
@@ -988,9 +1420,9 @@
 								 });
 		},
 		_template : function (params, pagesInfo, callback, service, createObj) {
-			var data = $.extend({}, params, pagesInfo);
+			var data = jQuery.extend({}, params, pagesInfo);
 			Gh3.Helper.callHttpApi({
-				service : service + '?' + decodeURIComponent($.param(data)),
+				service : service + '?' + decodeURIComponent(jQuery.param(data)),
 				success : function(res, text, jq) {
 					var items = [];
 					if (createObj) {
@@ -1013,3 +1445,4 @@
 	});
 
 }).call(this);
+
